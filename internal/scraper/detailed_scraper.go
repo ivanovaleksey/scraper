@@ -17,13 +17,8 @@ type DetailedScraper struct {
 	dataDir     string
 	concurrency int
 
-	pagesCache ItemsCache
-	mediaCache MediaCache
-}
-
-type MediaCache interface {
-	Set(string)
-	Has(string) bool
+	pagesCache  ItemsCache
+	assetsCache ItemsCache
 }
 
 type ItemsCache interface {
@@ -36,7 +31,7 @@ func NewDetailedScraper(logger *slog.Logger) *DetailedScraper {
 		logger:      logger,
 		concurrency: detailedScraperConcurrency,
 		pagesCache:  NewCache(),
-		mediaCache:  NewCache(),
+		assetsCache: NewCache(),
 	}
 }
 
@@ -44,19 +39,42 @@ func (ds *DetailedScraper) AddLinks(urls ...string) {
 	ds.pagesCache.SetMulti(urls...)
 }
 
-func (ds *DetailedScraper) Run() error {
-	links := ds.pagesCache.GetAll()
-	ds.logger.Info("detailed scraper started", slog.Int("links", len(links)))
+func (ds *DetailedScraper) AddAssets(urls ...string) {
+	ds.assetsCache.SetMulti(urls...)
+}
 
+func (ds *DetailedScraper) Run() error {
+	assets := ds.assetsCache.GetAll()
+	links := ds.pagesCache.GetAll()
+	ds.logger.Info("detailed scraper started", slog.Int("links", len(links)), slog.Int("assets", len(assets)))
+
+	err := ds.runWithConcurrency(assets, func(url string) error {
+		ds.logger.Debug("saving asset", slog.String("url", url))
+		_, err := saveObject(ds.dataDir, url)
+		return err
+	})
+	if err != nil {
+		return fmt.Errorf("failed to run assets concurrently: %w", err)
+	}
+
+	err = ds.runWithConcurrency(links, ds.parsePage)
+	if err != nil {
+		return fmt.Errorf("failed to run pages concurrently: %w", err)
+	}
+
+	return nil
+}
+
+func (ds *DetailedScraper) runWithConcurrency(links []string, fn func(url string) error) error {
 	ch := make(chan string, ds.concurrency)
 
 	group, ctx := errgroup.WithContext(context.Background())
 	for i := 0; i < ds.concurrency; i++ {
 		group.Go(func() error {
 			for link := range ch {
-				err := ds.parsePage(link)
+				err := fn(link)
 				if err != nil {
-					return fmt.Errorf("failed to parse detailed page %q': %w", link, err)
+					return fmt.Errorf("failed to run concurrently %q: %w", link, err)
 				}
 			}
 			return nil
@@ -101,14 +119,9 @@ func (ds *DetailedScraper) parsePage(pageURL string) error {
 	})
 
 	for _, image := range images {
-		if ds.mediaCache.Has(image) {
-			ds.logger.Warn("cache hit", slog.String("image", image))
-		} else {
-			_, err = saveObject(ds.dataDir, image)
-			if err != nil {
-				return fmt.Errorf("failed to save image: %w", err)
-			}
-			ds.mediaCache.Set(image)
+		_, err = saveObject(ds.dataDir, image)
+		if err != nil {
+			return fmt.Errorf("failed to save image: %w", err)
 		}
 	}
 

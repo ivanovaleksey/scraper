@@ -66,12 +66,15 @@ func (srv *Service) Run() error {
 		detailedCallback := func(links []string) {
 			srv.detailedScraper.AddLinks(links...)
 		}
-		err = srv.listScraper.Run("index.html", detailedCallback)
+		assetsCallback := func(links []string) {
+			srv.detailedScraper.AddAssets(links...)
+		}
+		err = srv.listScraper.Run("index.html", detailedCallback, assetsCallback)
 		if err != nil {
 			return fmt.Errorf("failed to paginate main page: %w", err)
 		}
 
-		err = srv.parseCategories(doc, detailedCallback)
+		err = srv.parseCategories(doc, detailedCallback, assetsCallback)
 		if err != nil {
 			return err
 		}
@@ -85,7 +88,7 @@ func (srv *Service) Run() error {
 	return nil
 }
 
-func (srv *Service) parseCategories(doc *goquery.Document, cb func([]string)) error {
+func (srv *Service) parseCategories(doc *goquery.Document, cb1, cb2 func([]string)) error {
 	var categories []string
 	doc.Find("div.side_categories li a").Each(func(i int, s *goquery.Selection) {
 		value, _ := s.Attr("href")
@@ -93,14 +96,10 @@ func (srv *Service) parseCategories(doc *goquery.Document, cb func([]string)) er
 	})
 	srv.logger.Debug("got categories", slog.Int("num", len(categories)))
 
-	// todo: all categories
-	for _, href := range categories[:3] {
-		err := srv.listScraper.Run(href, cb)
-		if err != nil {
-			return fmt.Errorf("failed to parse category %q: %w", href, err)
-		}
+	err := srv.listScraper.RunMultiple(categories, cb1, cb2)
+	if err != nil {
+		return fmt.Errorf("failed to parse categories: %w", err)
 	}
-
 	return nil
 }
 
