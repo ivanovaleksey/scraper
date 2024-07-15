@@ -2,15 +2,20 @@ package scraper
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"log/slog"
 
 	"github.com/PuerkitoBio/goquery"
+	"golang.org/x/sync/errgroup"
 )
 
+const detailedScraperConcurrency = 5
+
 type DetailedScraper struct {
-	logger  *slog.Logger
-	dataDir string
+	logger      *slog.Logger
+	dataDir     string
+	concurrency int
 
 	pagesCache ItemsCache
 	mediaCache MediaCache
@@ -28,9 +33,10 @@ type ItemsCache interface {
 
 func NewDetailedScraper(logger *slog.Logger) *DetailedScraper {
 	return &DetailedScraper{
-		logger:     logger,
-		pagesCache: NewCache(),
-		mediaCache: NewCache(),
+		logger:      logger,
+		concurrency: detailedScraperConcurrency,
+		pagesCache:  NewCache(),
+		mediaCache:  NewCache(),
 	}
 }
 
@@ -38,19 +44,36 @@ func (ds *DetailedScraper) AddLinks(urls ...string) {
 	ds.pagesCache.SetMulti(urls...)
 }
 
-// todo: add concurrency
 func (ds *DetailedScraper) Run() error {
 	links := ds.pagesCache.GetAll()
 	ds.logger.Info("detailed scraper started", slog.Int("links", len(links)))
 
-	// todo: all links
-	for _, link := range links[:10] {
-		err := ds.parsePage(link)
-		if err != nil {
-			return fmt.Errorf("failed to parse detailed page %q': %w", link, err)
-		}
+	ch := make(chan string, ds.concurrency)
+
+	group, ctx := errgroup.WithContext(context.Background())
+	for i := 0; i < ds.concurrency; i++ {
+		group.Go(func() error {
+			for link := range ch {
+				err := ds.parsePage(link)
+				if err != nil {
+					return fmt.Errorf("failed to parse detailed page %q': %w", link, err)
+				}
+			}
+			return nil
+		})
 	}
-	return nil
+	go func() {
+		defer close(ch)
+		for _, link := range links {
+			select {
+			case <-ctx.Done():
+				return
+			case ch <- link:
+			}
+		}
+	}()
+
+	return group.Wait()
 }
 
 func (ds *DetailedScraper) SetDataDir(dir string) {
