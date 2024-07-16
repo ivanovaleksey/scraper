@@ -31,11 +31,11 @@ func NewService(logger *slog.Logger) *Service {
 	}
 }
 
-func (srv *Service) Run() error {
+func (srv *Service) Run() (string, error) {
 	var err error
 	srv.dataDir, err = os.MkdirTemp("data", "run_*")
 	if err != nil {
-		return fmt.Errorf("failed to create data directory: %w", err)
+		return "", fmt.Errorf("failed to create data directory: %w", err)
 	}
 
 	srv.listScraper.SetDataDir(srv.dataDir)
@@ -43,35 +43,35 @@ func (srv *Service) Run() error {
 
 	resp, err := http.Get(host)
 	if err != nil {
-		return fmt.Errorf("failed to get page: %w", err)
+		return "", fmt.Errorf("failed to get page: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
-		return fmt.Errorf("unexpected response code: %d", resp.StatusCode)
+		return "", fmt.Errorf("unexpected response code: %d", resp.StatusCode)
 	}
 
 	doc, err := goquery.NewDocumentFromReader(resp.Body)
 	if err != nil {
-		return fmt.Errorf("failed to build document: %w", err)
+		return "", fmt.Errorf("failed to build document: %w", err)
 	}
 
 	err = srv.saveStatics(doc)
 	if err != nil {
-		return fmt.Errorf("failed to save statics: %w", err)
+		return "", fmt.Errorf("failed to save statics: %w", err)
 	}
 
 	err = srv.parseMainPage(doc)
 	if err != nil {
-		return fmt.Errorf("failed to parse main page: %w", err)
+		return "", fmt.Errorf("failed to parse main page: %w", err)
 	}
 
 	err = srv.detailedScraper.Run()
 	if err != nil {
-		return fmt.Errorf("failed to parse detailed pages: %w", err)
+		return "", fmt.Errorf("failed to parse detailed pages: %w", err)
 	}
 
-	return nil
+	return srv.dataDir, nil
 }
 
 func (srv *Service) parseMainPage(doc *goquery.Document) error {

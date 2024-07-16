@@ -19,4 +19,5 @@ WORKDIR /app
 
 COPY --from=builder /build/bin/scraper .
 
-CMD ["/app/scraper"]
+ENTRYPOINT ["/app/scraper"]
+CMD ["-web"]
