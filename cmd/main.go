@@ -9,7 +9,7 @@ import (
 
 func main() {
 	opts := &slog.HandlerOptions{
-		Level: slog.LevelDebug,
+		Level: slog.LevelInfo,
 	}
 	logger := slog.New(slog.NewTextHandler(os.Stdout, opts))
 	logger.Debug("start")

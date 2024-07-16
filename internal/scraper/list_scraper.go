@@ -9,6 +9,7 @@ import (
 	"path"
 
 	"github.com/PuerkitoBio/goquery"
+	"github.com/schollz/progressbar/v3"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -31,16 +32,17 @@ func (ls *ListScraper) SetDataDir(dir string) {
 	ls.dataDir = dir
 }
 
+type parsePageCallback func(links []string, assets []string)
+
 // Run parses given page and paginates further.
 // Given callback is called with detailed links from each page.
-func (ls *ListScraper) Run(page string, detailedCb, assetsCb func([]string)) error {
+func (ls *ListScraper) Run(page string, cb parsePageCallback) error {
 	for {
 		links, assets, nextPage, err := ls.parsePage(page)
 		if err != nil {
 			return err
 		}
-		detailedCb(links)
-		assetsCb(assets)
+		cb(links, assets)
 
 		if nextPage == "" {
 			break
@@ -51,17 +53,20 @@ func (ls *ListScraper) Run(page string, detailedCb, assetsCb func([]string)) err
 }
 
 // RunMultiple parses given pages calling Run method concurrently.
-func (ls *ListScraper) RunMultiple(pages []string, detailedCb, assetsCb func([]string)) error {
+func (ls *ListScraper) RunMultiple(pages []string, cb parsePageCallback) error {
+	pb := progressbar.Default(int64(len(pages)), "parsing categories")
+	_ = pb.RenderBlank()
 	ch := make(chan string, ls.concurrency)
 
 	group, ctx := errgroup.WithContext(context.Background())
 	for i := 0; i < ls.concurrency; i++ {
 		group.Go(func() error {
 			for page := range ch {
-				err := ls.Run(page, detailedCb, assetsCb)
+				err := ls.Run(page, cb)
 				if err != nil {
 					return err
 				}
+				_ = pb.Add(1)
 			}
 			return nil
 		})

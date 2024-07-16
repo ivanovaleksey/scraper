@@ -7,6 +7,7 @@ import (
 	"log/slog"
 
 	"github.com/PuerkitoBio/goquery"
+	"github.com/schollz/progressbar/v3"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -45,19 +46,28 @@ func (ds *DetailedScraper) AddAssets(urls ...string) {
 
 func (ds *DetailedScraper) Run() error {
 	assets := ds.assetsCache.GetAll()
-	links := ds.pagesCache.GetAll()
-	ds.logger.Info("detailed scraper started", slog.Int("links", len(links)), slog.Int("assets", len(assets)))
+	pages := ds.pagesCache.GetAll()
+	ds.logger.Debug("detailed scraper started", slog.Int("pages", len(pages)), slog.Int("assets", len(assets)))
 
+	assetsPb := progressbar.Default(int64(len(assets)), "downloading assets")
+	_ = assetsPb.RenderBlank()
 	err := ds.runWithConcurrency(assets, func(url string) error {
 		ds.logger.Debug("saving asset", slog.String("url", url))
 		_, err := saveObject(ds.dataDir, url)
+		_ = assetsPb.Add(1)
 		return err
 	})
 	if err != nil {
 		return fmt.Errorf("failed to run assets concurrently: %w", err)
 	}
 
-	err = ds.runWithConcurrency(links, ds.parsePage)
+	pagesPb := progressbar.Default(int64(len(assets)), "parsing detailed pages")
+	_ = pagesPb.RenderBlank()
+	err = ds.runWithConcurrency(pages, func(url string) error {
+		err := ds.parsePage(url)
+		_ = pagesPb.Add(1)
+		return err
+	})
 	if err != nil {
 		return fmt.Errorf("failed to run pages concurrently: %w", err)
 	}
@@ -65,7 +75,7 @@ func (ds *DetailedScraper) Run() error {
 	return nil
 }
 
-func (ds *DetailedScraper) runWithConcurrency(links []string, fn func(url string) error) error {
+func (ds *DetailedScraper) runWithConcurrency(urls []string, fn func(string) error) error {
 	ch := make(chan string, ds.concurrency)
 
 	group, ctx := errgroup.WithContext(context.Background())
@@ -82,11 +92,11 @@ func (ds *DetailedScraper) runWithConcurrency(links []string, fn func(url string
 	}
 	go func() {
 		defer close(ch)
-		for _, link := range links {
+		for _, url := range urls {
 			select {
 			case <-ctx.Done():
 				return
-			case ch <- link:
+			case ch <- url:
 			}
 		}
 	}()

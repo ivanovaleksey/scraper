@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/PuerkitoBio/goquery"
+	"github.com/schollz/progressbar/v3"
 )
 
 const host = "https://books.toscrape.com"
@@ -30,8 +31,6 @@ func NewService(logger *slog.Logger) *Service {
 	}
 }
 
-// todo: save main page
-// todo: indicate progress (might have multiple: categories and detailed pages)
 func (srv *Service) Run() error {
 	var err error
 	srv.dataDir, err = os.MkdirTemp("data", "run_*")
@@ -62,22 +61,9 @@ func (srv *Service) Run() error {
 		return fmt.Errorf("failed to save statics: %w", err)
 	}
 
-	{
-		detailedCallback := func(links []string) {
-			srv.detailedScraper.AddLinks(links...)
-		}
-		assetsCallback := func(links []string) {
-			srv.detailedScraper.AddAssets(links...)
-		}
-		err = srv.listScraper.Run("index.html", detailedCallback, assetsCallback)
-		if err != nil {
-			return fmt.Errorf("failed to paginate main page: %w", err)
-		}
-
-		err = srv.parseCategories(doc, detailedCallback, assetsCallback)
-		if err != nil {
-			return err
-		}
+	err = srv.parseMainPage(doc)
+	if err != nil {
+		return fmt.Errorf("failed to parse main page: %w", err)
 	}
 
 	err = srv.detailedScraper.Run()
@@ -88,7 +74,29 @@ func (srv *Service) Run() error {
 	return nil
 }
 
-func (srv *Service) parseCategories(doc *goquery.Document, cb1, cb2 func([]string)) error {
+func (srv *Service) parseMainPage(doc *goquery.Document) error {
+	pb := progressbar.Default(-1, "parsing main page")
+	_ = pb.RenderBlank()
+	cb := func(links, assets []string) {
+		srv.detailedScraper.AddLinks(links...)
+		srv.detailedScraper.AddAssets(assets...)
+		_ = pb.Add(1)
+	}
+	err := srv.listScraper.Run("index.html", cb)
+	if err != nil {
+		return fmt.Errorf("failed to paginate main page: %w", err)
+	}
+	_ = pb.Finish()
+
+	err = srv.parseCategories(doc)
+	if err != nil {
+		return fmt.Errorf("failed to parse categories: %w", err)
+	}
+
+	return nil
+}
+
+func (srv *Service) parseCategories(doc *goquery.Document) error {
 	var categories []string
 	doc.Find("div.side_categories li a").Each(func(i int, s *goquery.Selection) {
 		value, _ := s.Attr("href")
@@ -96,11 +104,11 @@ func (srv *Service) parseCategories(doc *goquery.Document, cb1, cb2 func([]strin
 	})
 	srv.logger.Debug("got categories", slog.Int("num", len(categories)))
 
-	err := srv.listScraper.RunMultiple(categories, cb1, cb2)
-	if err != nil {
-		return fmt.Errorf("failed to parse categories: %w", err)
+	cb := func(links, assets []string) {
+		srv.detailedScraper.AddLinks(links...)
+		srv.detailedScraper.AddAssets(assets...)
 	}
-	return nil
+	return srv.listScraper.RunMultiple(categories, cb)
 }
 
 func (srv *Service) saveStatics(doc *goquery.Document) error {
